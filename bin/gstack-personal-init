@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# gstack-personal-init — install gstack for personal use across ALL your repos.
+#
+# Idempotent. Safe to re-run on every machine you code on. Does three things:
+#   1. Global install at ~/.claude/skills/gstack (clone if missing, else a
+#      non-destructive fast-forward pull) and run ./setup, so every gstack
+#      slash command is available in EVERY repo on this machine.
+#   2. Adds a managed gstack block to ~/.claude/CLAUDE.md (user-level memory)
+#      so Claude proactively routes to gstack skills in every project — one
+#      file, not a per-repo edit.
+#   3. Sets auto_upgrade=true so the single global install stays current.
+#
+# Usage:
+#   gstack-personal-init
+#
+# Personal use needs NO per-repo setup — skills under ~/.claude/skills/ are
+# global. Per-repo CLAUDE.md edits are a TEAM concern; see gstack-team-init.
+
+set -euo pipefail
+
+REPO_URL="https://github.com/garrytan/gstack.git"
+INSTALL_DIR="$HOME/.claude/skills/gstack"
+USER_CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+BEGIN_MARKER="<!-- gstack:personal:begin (managed by gstack-personal-init; edits between markers are overwritten on re-run) -->"
+END_MARKER="<!-- gstack:personal:end -->"
+
+# ── Step 1: global install (idempotent) ──────────────────────────────
+
+if [ -d "$INSTALL_DIR/.git" ]; then
+  echo "1/3  gstack already installed at $INSTALL_DIR — refreshing..."
+  if ! git -C "$INSTALL_DIR" pull --ff-only >/dev/null 2>&1; then
+    echo "     (skipped fast-forward pull: local changes or diverged history — leaving working tree as-is)"
+  fi
+elif [ -e "$INSTALL_DIR" ]; then
+  echo "1/3  $INSTALL_DIR exists but is not a git clone (dev symlink?) — leaving as-is."
+else
+  echo "1/3  Cloning gstack to $INSTALL_DIR ..."
+  mkdir -p "$(dirname "$INSTALL_DIR")"
+  git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+fi
+
+if [ -f "$INSTALL_DIR/setup" ]; then
+  echo "     Running ./setup ..."
+  ( cd "$INSTALL_DIR" && ./setup )
+else
+  echo "Error: $INSTALL_DIR/setup not found — install incomplete." >&2
+  exit 1
+fi
+
+# ── Step 2: user-level CLAUDE.md routing block (idempotent) ──────────
+
+read -r -d '' GSTACK_BLOCK <<'BLOCK' || true
+## gstack
+Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
+Available skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,
+/design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy,
+/canary, /benchmark, /browse, /open-gstack-browser, /qa, /qa-only, /design-review,
+/setup-browser-cookies, /setup-deploy, /setup-gbrain, /sync-gbrain, /retro, /investigate,
+/document-release, /document-generate, /codex, /cso, /autoplan, /pair-agent, /careful, /freeze,
+/guard, /unfreeze, /gstack-upgrade, /learn.
+BLOCK
+GSTACK_BLOCK="${GSTACK_BLOCK%$'\n'}"
+
+MANAGED_BLOCK="$BEGIN_MARKER
+$GSTACK_BLOCK
+$END_MARKER"
+
+mkdir -p "$(dirname "$USER_CLAUDE_MD")"
+touch "$USER_CLAUDE_MD"
+
+if grep -qF "$BEGIN_MARKER" "$USER_CLAUDE_MD" 2>/dev/null; then
+  ACTION="Refreshed managed gstack block in"
+elif grep -q '^## gstack' "$USER_CLAUDE_MD" 2>/dev/null; then
+  echo "2/3  $USER_CLAUDE_MD already has an unmanaged '## gstack' section — leaving it untouched."
+  echo "     (Delete that section and re-run if you want this script to manage it.)"
+  ACTION=""
+else
+  ACTION="Added managed gstack block to"
+fi
+
+if [ -n "$ACTION" ]; then
+  tmp="$(mktemp "${USER_CLAUDE_MD}.XXXXXX")"
+  # Strip any existing managed block (anywhere) and trailing blank lines, so
+  # re-running converges to byte-identical output.
+  awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
+    $0 == b { skip = 1; next }
+    skip && $0 == e { skip = 0; next }
+    skip { next }
+    { lines[++n] = $0 }
+    END {
+      last = 0
+      for (i = 1; i <= n; i++) if (lines[i] ~ /[^ \t]/) last = i
+      for (i = 1; i <= last; i++) print lines[i]
+    }
+  ' "$USER_CLAUDE_MD" > "$tmp"
+  if [ -s "$tmp" ]; then
+    printf '\n%s\n' "$MANAGED_BLOCK" >> "$tmp"
+  else
+    printf '%s\n' "$MANAGED_BLOCK" > "$tmp"
+  fi
+  mv "$tmp" "$USER_CLAUDE_MD"
+  echo "2/3  $ACTION $USER_CLAUDE_MD"
+fi
+
+# ── Step 3: keep the single global install current ───────────────────
+
+if [ -x "$INSTALL_DIR/bin/gstack-config" ]; then
+  "$INSTALL_DIR/bin/gstack-config" set auto_upgrade true
+  echo "3/3  auto_upgrade=true (the global install self-updates on session start)"
+else
+  echo "3/3  Warning: gstack-config not found — skipped auto_upgrade." >&2
+fi
+
+echo ""
+echo "Done. gstack is now available in EVERY repo on this machine."
+echo "Nothing to add per-repo for personal use — open any project and type /review."
