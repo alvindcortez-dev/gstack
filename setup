@@ -363,7 +363,22 @@ if [ "$INSTALL_OPENCODE" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
 fi
 
 # 2. Ensure Playwright's Chromium is available
-if ! ensure_playwright_browser; then
+#
+# GSTACK_SKIP_BROWSER=1 — opt out of the browser gate for headless / CI / web
+# environments (e.g. Claude Code on the web, where the Playwright CDN is not in
+# the network allowlist so Chromium can't be downloaded or launched). Non-browser
+# skills (planning, review, ship, ...) still install; browser skills (/browse,
+# /qa, /design-review, /canary) only work once Chromium is available. Mirrors the
+# GSTACK_SKIP_COREUTILS opt-out convention above.
+_skip_browser=0
+if [ "${GSTACK_SKIP_BROWSER:-0}" = "1" ]; then
+  _skip_browser=1
+  echo "  note: GSTACK_SKIP_BROWSER=1 — skipping Playwright Chromium setup."
+  echo "        Browser skills stay unavailable until you run:"
+  echo "        bunx playwright install chromium && bunx playwright install-deps chromium"
+fi
+
+if [ "$_skip_browser" -eq 0 ] && ! ensure_playwright_browser; then
   echo "Installing Playwright Chromium..."
   (
     cd "$SOURCE_GSTACK_DIR"
@@ -391,7 +406,7 @@ if ! ensure_playwright_browser; then
   fi
 fi
 
-if ! ensure_playwright_browser; then
+if [ "$_skip_browser" -eq 0 ] && ! ensure_playwright_browser; then
   if [ "$IS_WINDOWS" -eq 1 ]; then
     echo "gstack setup failed: Playwright Chromium could not be launched via Node.js" >&2
     echo "  This is a known issue with Bun on Windows (oven-sh/bun#4253)." >&2
